@@ -2,68 +2,69 @@ using UnityEngine;
 
 public class CameraController : MonoBehaviour
 {
-    public Transform player;          // Target pemain
-    public Vector3 offset = new Vector3(0, 2, -5);  // Posisi relatif kamera terhadap pemain
-    public float rotationSpeed = 5f;  // Kecepatan rotasi kamera
-    public float minDistance = 1f;    // Jarak minimal antara kamera dan pemain saat ada halangan
-    public float maxDistance = 5f;    // Jarak maksimal dari offset asli kamera
-    public LayerMask collisionLayers; // Layer untuk mendeteksi halangan
+    public Transform player; // Referensi ke pemain
+    public Vector3 offset = new Vector3(0, 3, -6); // Jarak default kamera dari pemain
+    public float rotationSpeed = 3.0f; // Kecepatan rotasi kamera
+    public float collisionOffset = 0.2f; // Jarak offset untuk menghindari tabrakan
+    public LayerMask collisionLayer; // Layer untuk objek yang bisa bertabrakan dengan kamera
 
-    private float currentDistance;    // Jarak saat ini dari kamera ke pemain
-    private Vector3 currentOffset;    // Offset kamera yang diperbarui berdasarkan halangan
+    private Vector3 currentOffset; // Jarak kamera saat ini dari pemain
+    private float currentZoom = 1.0f; // Faktor zoom dinamis untuk menghindari tabrakan
 
     void Start()
     {
-        currentDistance = offset.magnitude;
         currentOffset = offset;
 
-        // Cursor Lock
-        Cursor.visible = false; // Menyembunyikan kursor
-        Cursor.lockState = CursorLockMode.Locked; // Mengunci kursor di tengah
+        // Lock Cursor
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     void LateUpdate()
     {
         RotateCamera();
-        HandleCollision();
+        HandleCameraCollision();
         UpdateCameraPosition();
     }
 
+    // Fungsi untuk rotasi kamera berdasarkan input mouse
     void RotateCamera()
     {
         float horizontalInput = Input.GetAxis("Mouse X") * rotationSpeed;
         float verticalInput = -Input.GetAxis("Mouse Y") * rotationSpeed;
 
-        // Rotasi kamera berdasarkan input mouse
         Quaternion rotation = Quaternion.Euler(verticalInput, horizontalInput, 0);
         offset = rotation * offset;
-        currentOffset = offset.normalized * currentDistance;
+
+        // Pastikan kamera tidak terlalu rendah atau tinggi
+        offset = new Vector3(offset.x, Mathf.Clamp(offset.y, 1.0f, 5.0f), offset.z);
     }
 
-    void HandleCollision()
+    // Fungsi untuk mendeteksi dan menangani tabrakan dengan objek
+    void HandleCameraCollision()
     {
         RaycastHit hit;
 
-        // Cek apakah ada objek di antara kamera dan pemain
-        if (Physics.Raycast(player.position, -currentOffset.normalized, out hit, maxDistance, collisionLayers))
+        // Membuat ray dari pemain ke kamera untuk mendeteksi tabrakan
+        Vector3 desiredPosition = player.position + offset * currentZoom;
+        if (Physics.Linecast(player.position, desiredPosition, out hit, collisionLayer))
         {
-            currentDistance = Mathf.Clamp(hit.distance, minDistance, maxDistance);
+            // Kamera akan bergerak lebih dekat ke pemain jika ada objek di antara
+            float distance = Vector3.Distance(player.position, hit.point) - collisionOffset;
+            currentZoom = Mathf.Clamp(distance / offset.magnitude, 0.3f, 1.0f);
         }
         else
         {
-            // Jika tidak ada halangan, kembali ke jarak maksimum
-            currentDistance = maxDistance;
+            // Kembali ke zoom default jika tidak ada objek
+            currentZoom = Mathf.Lerp(currentZoom, 1.0f, Time.deltaTime * 5f);
         }
-
-        // Sesuaikan offset berdasarkan jarak saat ini
-        currentOffset = offset.normalized * currentDistance;
     }
 
+    // Fungsi untuk memperbarui posisi kamera mengikuti pemain
     void UpdateCameraPosition()
     {
-        // Posisi akhir kamera dengan mempertimbangkan offset dan rotasi
-        Vector3 targetPosition = player.position + currentOffset;
-        transform.position = Vector3.Lerp(transform.position, targetPosition, Time.deltaTime * rotationSpeed);
-        transform.LookAt(player.position + Vector3.up * 1.5f); // Titik pandang sedikit di atas pemain
+        Vector3 targetPosition = player.position + offset * currentZoom;
+        transform.position = Vector3.Lerp(transform.position, targetPosition, Time.deltaTime * 10f);
+        transform.LookAt(player.position + Vector3.up * 1.5f); // Menatap pemain dengan sedikit elevasi
     }
 }
