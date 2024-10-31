@@ -1,326 +1,338 @@
 using UnityEngine;
 
+[RequireComponent(typeof(Rigidbody), typeof(Animator))]
 public class PlayerController : MonoBehaviour
 {
-    // Basic Variables
-    public float walkSpeed = 5f;
-    public float jumpForce = 7f;
-    public float longJumpForce = 10f;
-    public float groundPoundForce = -20f;
-    public float diveSpeed = 10f;
-    public float wallJumpForce = 10f;
-    public float capThrowCooldown = 1f;
-    public float rollSpeed = 10f; // Kecepatan rolling
-
-    public GameObject playerCamera;
-
-    private bool isGrounded;
-    private bool isLongJumping;
-    private bool isRolling;
-    private bool canDoubleJump;
-    private bool canTripleJump;
-    private bool canWallJump;
-    private bool isSwimming;
-    private bool isClimbing;
-    private float capThrowTimer;
-
-    // Components
+    // Komponen
     private Rigidbody rb;
     private Animator animator;
-    private CappyController cappy;
+    private AudioSource audioSource;
+
+    // Variabel Climbing
+    public float climbSpeed = 2f;
+    public LayerMask climbableLayer;
+    private bool canClimb;
+    private Transform climbPoint;
+
+    // Variabel Movement
+    public float speed = 5f;
+    public float jumpForce = 7f;
+    public float longJumpForce = 10f;
+    public float diveForce = 15f;
+    public float rollSpeed = 8f;
+    public float wallJumpForce = 7f;
+    private bool isGrounded;
+    private bool isRolling;
+    private bool isClimbing;
+    private int jumpCount;
+
+    // Variabel Cappy
+    public GameObject cappy;
+    public Transform cappyThrowPoint;
+    private bool cappyThrown;
+    private bool isCaptured;
+
+    // Sound Effects
+    public AudioClip jumpSound;
+    public AudioClip walkSound;
+    public AudioClip groundPoundSound;
+    public AudioClip diveSound;
+    public AudioClip longJumpSound;
+    public AudioClip wallJumpSound;
+    public AudioClip capThrowSound;
+    public AudioClip captureSound;
+
+    // Variabel Kamera
+    [SerializeField] private Transform cameraTransform;
 
     void Start()
     {
         rb = GetComponent<Rigidbody>();
         animator = GetComponent<Animator>();
-        cappy = GetComponentInChildren<CappyController>();
+        audioSource = GetComponent<AudioSource>();
+
+        // Optional: Assign camera automatically if not set in the Inspector
+        if (cameraTransform == null && Camera.main != null)
+        {
+            cameraTransform = Camera.main.transform;
+        }
     }
 
     void Update()
     {
-        Move();
-        Jump();
-        WallJump();
-        LongJump();
-        CapThrow();
-        SpecialActions();
-        SideFlipAndBackFlip();
+        if (isClimbing)
+        {
+            HandleClimbing();
+        }
+        else
+        {
+            Move();
+            HandleJumping();
+            HandleTripleJump();
+            HandleLongJump();
+            HandleDiving();
+            HandleGroundPound();
+            HandleRolling();
+            HandleWallJump();
+            HandleSideFlip();
+            HandleCappyThrow();
+            HandleCapJump();
+            HandleSpinJump();
+            HandleCaptureMechanic();
+            AnimatePlayer();
+        }
+
+        CheckForClimb();
     }
 
-    // Movement
+    // Fungsi untuk movement dasar
     void Move()
     {
-        float horizontal = Input.GetAxis("Horizontal");
-        float vertical = Input.GetAxis("Vertical");
-        Vector3 direction = new Vector3(horizontal, 0, vertical).normalized;
+        float h = Input.GetAxis("Horizontal");
+        float v = Input.GetAxis("Vertical");
 
-        // Mendapatkan arah kamera
-        Vector3 cameraForward = playerCamera.transform.forward;
-        cameraForward.y = 0; // Menghilangkan komponen y
-        Vector3 cameraRight = playerCamera.transform.right;
-        cameraRight.y = 0; // Menghilangkan komponen y
+        // Adjust move direction based on the camera's forward direction
+        Vector3 forward = cameraTransform.forward;
+        Vector3 right = cameraTransform.right;
 
-        // Hitung arah gerakan berdasarkan kamera
-        Vector3 moveDirection = (cameraForward.normalized * vertical + cameraRight.normalized * horizontal).normalized;
+        // Keep the player movement parallel to the ground
+        forward.y = 0;
+        right.y = 0;
+        forward.Normalize();
+        right.Normalize();
 
-        if (isGrounded && !isRolling && moveDirection.magnitude >= 0.1f)
+        // Calculate movement direction relative to camera
+        Vector3 moveDir = forward * v + right * h;
+        rb.MovePosition(transform.position + moveDir * speed * Time.deltaTime);
+
+        // Rotate player to face movement direction
+        if (moveDir != Vector3.zero)
+            transform.forward = moveDir;
+
+        // Trigger walk animation and sound
+        animator.SetBool("isWalking", moveDir.magnitude > 0);
+        if (moveDir.magnitude > 0 && isGrounded && !audioSource.isPlaying)
         {
-            float targetSpeed = walkSpeed;
-            rb.MovePosition(transform.position + moveDirection * targetSpeed * Time.deltaTime);
-
-            // Atur rotasi pemain
-            transform.rotation = Quaternion.LookRotation(moveDirection);
-
-            animator.SetBool("isWalking", true);
-        }
-        else
-        {
-            // Kembalikan ke posisi tegak
-            animator.SetBool("isWalking", false);
-        }
-    }
-
-
-
-    // Long Jump
-    void LongJump()
-    {
-        // Cek apakah pemain bergerak maju, di tanah, dan menekan tombol khusus (misalnya, "Fire3")
-        if (Input.GetButtonDown("Fire3") && isGrounded && rb.velocity.magnitude > 0.1f)
-        {
-            Vector3 longJumpDirection = transform.forward * longJumpForce;
-            rb.velocity = new Vector3(longJumpDirection.x, jumpForce, longJumpDirection.z);
-            isGrounded = false;
-            isLongJumping = true;
-            animator.SetBool("isLongJumping", true); // Atur animasi Long Jump
+            audioSource.PlayOneShot(walkSound);
         }
     }
 
-    // Jump
-    void Jump()
+
+    // Fungsi untuk lompat dasar
+    void HandleJumping()
     {
-        if (Input.GetButtonDown("Jump") && isGrounded && !isLongJumping) // Tambahkan cek !isLongJumping
+        if (Input.GetButtonDown("Jump") && isGrounded)
         {
-            rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
             isGrounded = false;
-            canDoubleJump = true;
+            jumpCount = 1;
             animator.SetBool("isJumping", true);
-        }
-        else if (Input.GetButtonDown("Jump") && canDoubleJump)
-        {
-            rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-            canDoubleJump = false;
-            canTripleJump = true;
-            animator.SetBool("isDoubleJumping", true);
-        }
-        else if (Input.GetButtonDown("Jump") && canTripleJump)
-        {
-            rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-            canTripleJump = false;
-            animator.SetBool("isTripleJumping", true);
+            audioSource.PlayOneShot(jumpSound);
         }
     }
 
-    // Wall Jump and Cap Jump
-    void WallJump()
+    // Fungsi untuk Triple Jump
+    void HandleTripleJump()
     {
-        if (canWallJump && Input.GetButtonDown("Jump"))
+        if (Input.GetButtonDown("Jump") && !isGrounded && jumpCount == 2)
         {
-            rb.velocity = new Vector3(rb.velocity.x, wallJumpForce, rb.velocity.z);
-            canWallJump = false;
-            animator.SetBool("isWallJumping", true);
+            rb.AddForce(Vector3.up * jumpForce * 1.2f, ForceMode.Impulse);
+            jumpCount = 3;
+            animator.SetTrigger("isTripleJumping");
+            audioSource.PlayOneShot(jumpSound);
         }
     }
 
-    void CapThrow()
+    // Fungsi untuk Long Jump
+    void HandleLongJump()
     {
-        capThrowTimer -= Time.deltaTime;
-        if (Input.GetButtonDown("Fire1") && capThrowTimer <= 0)
+        if (Input.GetKeyDown(KeyCode.LeftShift) && isGrounded && Input.GetButton("Jump"))
         {
-            cappy.ThrowCap();
-            capThrowTimer = capThrowCooldown;
-            animator.SetBool("isThrowingCap", true);
+            rb.AddForce(transform.forward * longJumpForce + Vector3.up * jumpForce, ForceMode.Impulse);
+            animator.SetTrigger("isLongJumping");
+            audioSource.PlayOneShot(longJumpSound);
         }
     }
 
-    void SpecialActions()
+    // Fungsi untuk Dive
+    void HandleDiving()
     {
-        // Ground Pound
-        if (Input.GetButtonDown("Fire2") && !isGrounded)
+        if (Input.GetKeyDown(KeyCode.LeftShift) && !isGrounded && !isRolling)
         {
-            rb.velocity = new Vector3(0, groundPoundForce, 0);
-            animator.SetBool("isGroundPounding", true);
+            rb.AddForce(transform.forward * diveForce, ForceMode.Impulse);
+            animator.SetTrigger("isDiving");
+            audioSource.PlayOneShot(diveSound);
         }
+    }
 
-        // Dive
-        if (Input.GetButtonDown("Fire3") && !isGrounded)
+    // Fungsi untuk Ground Pound
+    void HandleGroundPound()
+    {
+        if (Input.GetKeyDown(KeyCode.LeftControl) && !isGrounded)
         {
-            Vector3 diveDirection = transform.forward * diveSpeed;
-            rb.velocity = new Vector3(diveDirection.x, rb.velocity.y, diveDirection.z);
-            animator.SetBool("isDiving", true);
+            rb.AddForce(Vector3.down * diveForce, ForceMode.Impulse);
+            animator.SetTrigger("isGroundPounding");
+            audioSource.PlayOneShot(groundPoundSound);
         }
+    }
 
-        // Roll (on ground and moving)
-        if (Input.GetButton("Roll") && isGrounded && rb.velocity.magnitude > 0)
+    // Fungsi untuk Roll
+    void HandleRolling()
+    {
+        if (Input.GetKeyDown(KeyCode.R) && isGrounded)
         {
-            // Dapatkan arah kamera
-            Vector3 cameraDirection = Camera.main.transform.forward;
-            cameraDirection.y = 0; // Mengabaikan gerakan vertikal
-            cameraDirection.Normalize(); // Normalisasi untuk mendapatkan vektor arah yang tepat
-
-            // Mengatur kecepatan rolling
-            rb.velocity = cameraDirection * rollSpeed; // rollSpeed adalah variabel baru yang perlu Anda tambahkan
             isRolling = true;
+            rb.AddForce(transform.forward * rollSpeed, ForceMode.Impulse);
             animator.SetBool("isRolling", true);
         }
-        else
+        else if (isRolling && Input.GetKeyUp(KeyCode.R))
         {
             isRolling = false;
             animator.SetBool("isRolling", false);
         }
+    }
 
-        // Swimming
-        if (isSwimming)
+    // Fungsi untuk Wall Jump
+    void HandleWallJump()
+    {
+        if (Input.GetKeyDown(KeyCode.Space) && !isGrounded && jumpCount == 1)
         {
-            Swim();
-        }
-
-        // Climbing
-        if (isClimbing)
-        {
-            Climb();
+            rb.AddForce(Vector3.up * wallJumpForce + -transform.forward * wallJumpForce, ForceMode.Impulse);
+            jumpCount = 2;
+            animator.SetTrigger("isWallJumping");
+            audioSource.PlayOneShot(wallJumpSound);
         }
     }
 
-    // Side Flip and Back Flip
-    void SideFlipAndBackFlip()
+    // Fungsi untuk Side Flip
+    void HandleSideFlip()
     {
-        float horizontal = Input.GetAxis("Horizontal");
-        if (isGrounded && Input.GetButtonDown("Jump"))
+        if (Input.GetKeyDown(KeyCode.Space) && Input.GetAxis("Horizontal") != 0)
         {
-            if (horizontal > 0) // Right movement
-            {
-                rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-                rb.AddForce(new Vector3(5f, 0, 0), ForceMode.Impulse); // Gaya ke arah kanan
-                animator.SetBool("isSideFlipping", true);
-            }
-            else if (horizontal < 0) // Left movement
-            {
-                rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-                rb.AddForce(new Vector3(-5f, 0, 0), ForceMode.Impulse); // Gaya ke arah kiri
-                animator.SetBool("isSideFlipping", true);
-            }
-            else if (horizontal == 0 && Input.GetAxis("Vertical") < 0) // Backward movement
-            {
-                rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-                animator.SetBool("isBackFlipping", true);
-            }
+            rb.AddForce(Vector3.up * jumpForce * 1.1f, ForceMode.Impulse);
+            animator.SetTrigger("isSideFlipping");
+            audioSource.PlayOneShot(jumpSound);
         }
     }
 
-    // Swimming and Climbing
-    void Swim()
+    // Fungsi untuk Cappy Throw
+    void HandleCappyThrow()
     {
-        // Mengatur kecepatan berenang
-        float swimSpeed = 3f; // Kecepatan berenang (dapat disesuaikan)
-
-        // Mengambil input untuk bergerak
-        float horizontal = Input.GetAxis("Horizontal");
-        float vertical = Input.GetAxis("Vertical");
-
-        // Menghitung arah berenang
-        Vector3 swimDirection = new Vector3(horizontal, 0, vertical).normalized;
-
-        // Menggerakkan pemain
-        if (swimDirection.magnitude >= 0.1f)
+        if (Input.GetKeyDown(KeyCode.F) && !cappyThrown)
         {
-            // Bergerak dalam arah yang ditentukan
-            rb.MovePosition(transform.position + swimDirection * swimSpeed * Time.deltaTime);
+            GameObject thrownCappy = Instantiate(cappy, cappyThrowPoint.position, Quaternion.identity);
+            thrownCappy.GetComponent<Rigidbody>().AddForce(transform.forward * 10f, ForceMode.Impulse);
+            audioSource.PlayOneShot(capThrowSound);
+            cappyThrown = true;
+        }
+    }
 
-            // Atur rotasi pemain ke arah berenang
-            Quaternion targetRotation = Quaternion.LookRotation(swimDirection);
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 5f); // Menyelaraskan rotasi
+    // Fungsi untuk Cap Jump
+    void HandleCapJump()
+    {
+        if (Input.GetKeyDown(KeyCode.Space) && cappyThrown)
+        {
+            rb.AddForce(Vector3.up * jumpForce * 1.2f, ForceMode.Impulse);
+            animator.SetTrigger("isCapJumping");
+            cappyThrown = false; // Reset cap throw untuk loncatan berikutnya
+            audioSource.PlayOneShot(jumpSound);
+        }
+    }
+
+    // Fungsi untuk Spin Jump
+    void HandleSpinJump()
+    {
+        if (Input.GetKeyDown(KeyCode.LeftAlt))
+        {
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            animator.SetTrigger("isSpinJumping");
+            audioSource.PlayOneShot(jumpSound);
+        }
+    }
+
+    // Fungsi untuk Capture Mechanic
+    void HandleCaptureMechanic()
+    {
+        if (Input.GetKeyDown(KeyCode.C) && cappyThrown)
+        {
+            isCaptured = true;
+            animator.SetBool("isCaptured", true);
+            audioSource.PlayOneShot(captureSound);
+            // Logic tambahan untuk capture (contoh: ambil kontrol makhluk yang dicapture)
+        }
+    }
+
+    // Fungsi untuk Climbing
+    void HandleClimbing()
+    {
+        float v = Input.GetAxis("Vertical");
+        
+        if (v > 0)
+        {
+            rb.MovePosition(transform.position + Vector3.up * climbSpeed * Time.deltaTime);
+            animator.SetBool("isClimbing", true);
+        }
+        else if (v < 0)
+        {
+            rb.MovePosition(transform.position + Vector3.down * climbSpeed * Time.deltaTime);
         }
 
-        // Kontrol naik dan turun
-        if (Input.GetKey(KeyCode.Space)) // Naik
+        if (Input.GetButtonDown("Jump"))
         {
-            rb.velocity = new Vector3(rb.velocity.x, jumpForce * 0.5f, rb.velocity.z); // Naik dengan kecepatan tertentu
+            isClimbing = false;
+            rb.isKinematic = false;
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            animator.SetBool("isClimbing", false);
         }
-        else if (Input.GetKey(KeyCode.LeftControl)) // Turun
+    }
+
+    // Deteksi tepi untuk climbing
+    void CheckForClimb()
+    {
+        RaycastHit hit;
+        Vector3 origin = transform.position + Vector3.up;
+        
+        if (Physics.Raycast(origin, transform.forward, out hit, 1f, climbableLayer))
         {
-            rb.velocity = new Vector3(rb.velocity.x, -jumpForce * 0.5f, rb.velocity.z); // Turun dengan kecepatan tertentu
+            canClimb = true;
+            climbPoint = hit.transform;
         }
         else
         {
-            // Menjaga kecepatan vertikal agar tidak terlalu cepat saat tidak ada input
-            rb.velocity = new Vector3(rb.velocity.x, rb.velocity.y * 0.9f, rb.velocity.z); // Mengurangi kecepatan vertikal
+            canClimb = false;
         }
-        animator.SetBool("isSwimming", true);
+
+        if (canClimb && Input.GetKeyDown(KeyCode.E))
+        {
+            StartClimb();
+        }
     }
 
-    void Climb()
+    void StartClimb()
     {
-        if (Input.GetButtonDown("Jump")) // Menaikkan saat di tepi
-        {
-            rb.velocity = new Vector3(rb.velocity.x, jumpForce, rb.velocity.z);
-            isClimbing = false; // Stop climbing
-            animator.SetBool("isClimbing", false);
-        }
+        isClimbing = true;
+        rb.isKinematic = true;
+        transform.position = climbPoint.position - new Vector3(0, 1, 0); // Posisi climbing menyesuaikan objek
         animator.SetBool("isClimbing", true);
     }
 
+
+    // Fungsi Animasi
+    void AnimatePlayer()
+    {
+        animator.SetBool("isGrounded", isGrounded);
+        animator.SetBool("isCaptured", isCaptured);
+        // Set animasi lainnya sesuai mekanik
+    }
+
+    // Deteksi Grounded
     private void OnCollisionEnter(Collision collision)
     {
         if (collision.gameObject.CompareTag("Ground"))
         {
             isGrounded = true;
-            canWallJump = false;
-            animator.SetBool("isGrounded", true);
-            // Reset jumping animations when landing
+            jumpCount = 0;
             animator.SetBool("isJumping", false);
-            animator.SetBool("isDoubleJumping", false);
-            animator.SetBool("isTripleJumping", false);
-            animator.SetBool("isWallJumping", false);
-            animator.SetBool("isSideFlipping", false);
-            animator.SetBool("isBackFlipping", false);
-        }
-    }
-
-    private void OnCollisionExit(Collision collision)
-    {
-        if (collision.gameObject.CompareTag("Ground"))
-        {
-            isGrounded = false;
-            animator.SetBool("isGrounded", false);
-        }
-    }
-
-    private void OnTriggerEnter(Collider other)
-    {
-        if (other.CompareTag("Water"))
-        {
-            isSwimming = true;
-            animator.SetBool("isSwimming", true);
-        }
-        if (other.CompareTag("Climbable"))
-        {
-            isClimbing = true;
-            animator.SetBool("isClimbing", true);
-        }
-    }
-
-    private void OnTriggerExit(Collider other)
-    {
-        if (other.CompareTag("Water"))
-        {
-            isSwimming = false;
-            animator.SetBool("isSwimming", false);
-        }
-        if (other.CompareTag("Climbable"))
-        {
-            isClimbing = false;
-            animator.SetBool("isClimbing", false);
         }
     }
 }
